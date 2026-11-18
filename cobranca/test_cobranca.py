@@ -1,83 +1,88 @@
 from datetime import date
+from decimal import Decimal
 
-from cobranca import Config, decidir_aviso, executar, ler_mes, parse_planilha, vencimento
+from cobranca import Config, executar, ler_mes, ler_valor, montar_dados, reais, tipo_do_dia
 
-CFG = Config(dia_vencimento=10, dias_antes=3, intervalo_atraso=5,
-             smtp_usuario="cond@gmail.com", nome_predio="Ed. Victoria")
+CFG = Config(dia_extrato=10, intervalo_lembrete=5, smtp_usuario="luz@gmail.com",
+             nome_predio="Ed. Victoria", chave_pix="chave@pix",
+             email_responsavel="eu@x.com")
 
-PLANILHA = [
-    ["Apto", "Nome", "Email", "Valor", "2026-10", "11/2026"],
-    ["101", "Ana Souza", "ana@x.com", "R$ 450,00", "pago", ""],
-    ["102", "Bruno Lima", "bruno@x.com; carla@x.com", "R$ 450,00", "pago", "pago"],
-    ["103", "Caio", "caio@x.com", "R$ 450,00", "", "não"],
-    ["104", "Sem email", "", "R$ 450,00", "", ""],
+MORADORES = [
+    ["Apto", "Nome", "Email"],
+    ["101", "Eu (responsável)", ""],
+    ["102", "Ana Souza", "ana@x.com"],
+    ["201", "Bruno Lima", "bruno@x.com; carla@x.com"],
+    ["202", "Caio", "caio@x.com"],
+]
+CONTAS = [
+    ["Mês", "Valor"],
+    ["2026-10", "R$ 35,60"],
+    ["11/2026", "36,40"],
+]
+PAGAMENTOS = [
+    ["Data", "Apto", "Valor"],
+    ["01/10/2026", "102", "50,00"],   # pagou adiantado
+    ["12/10/2026", "201", "8,90"],
+    ["12/11/2026", "201", "9,10"],    # em dia
+    ["12/10/2026", "202", "8,90"],    # deve novembro
+    ["15/10/2026", "999", "10,00"],   # apto inexistente
 ]
 
 
-def moradores():
-    return {m.apto: m for m in parse_planilha(PLANILHA)}
+def dados():
+    return montar_dados(MORADORES, CONTAS, PAGAMENTOS)
 
 
-def test_ler_mes_formatos():
-    assert ler_mes("2026-11") == (2026, 11)
-    assert ler_mes("11/2026") == (2026, 11)
-    assert ler_mes("01/11/2026") == (2026, 11)
-    assert ler_mes("nov/2026") == (2026, 11)
-    assert ler_mes("'2026-11") == (2026, 11)
-    assert ler_mes("Valor") is None
-    assert ler_mes("13/2026") is None
+def saldos():
+    return {m.apto: m.saldo for m in dados().moradores}
 
 
-def test_parse_ignora_sem_email_e_separa_emails():
-    ms = moradores()
-    assert set(ms) == {"101", "102", "103"}
-    assert ms["102"].emails == ["bruno@x.com", "carla@x.com"]
-    assert ms["103"].pagamentos == {(2026, 10): False, (2026, 11): False}
+def test_ler_valor_e_mes():
+    assert ler_valor("R$ 1.234,56") == Decimal("1234.56")
+    assert ler_valor("36.40") == Decimal("36.40")
+    assert ler_valor("50") == Decimal("50.00")
+    assert ler_valor("") is None
+    assert ler_mes("2026-11") == (2026, 11) and ler_mes("nov/2026") == (2026, 11)
+    assert reais(Decimal("1234.5")) == "R$ 1.234,50"
 
 
-def test_vencimento_mes_curto():
-    assert vencimento(2026, 2, 31) == date(2026, 2, 28)
+def test_saldo_com_credito_e_divida():
+    s = saldos()
+    # partes: 35,60/4 = 8,90 ; 36,40/4 = 9,10 ; total 18,00
+    assert s == {"101": Decimal("-18.00"), "102": Decimal("32.00"),
+                 "201": Decimal("0.00"), "202": Decimal("-9.10")}
 
 
-def test_lembrete_e_vence_hoje():
-    ana = moradores()["101"]
-    assert decidir_aviso(ana, date(2026, 11, 7), CFG).tipo == "lembrete"
-    assert decidir_aviso(ana, date(2026, 11, 8), CFG) is None
-    assert decidir_aviso(ana, date(2026, 11, 10), CFG).tipo == "vence_hoje"
+def test_pagamento_de_apto_inexistente_vira_aviso():
+    assert any("999" in a for a in dados().avisos)
 
 
-def test_em_dia_nao_recebe():
-    bruno = moradores()["102"]
-    for dia in range(1, 31):
-        assert decidir_aviso(bruno, date(2026, 11, dia), CFG) is None
+def test_dias_de_envio():
+    assert tipo_do_dia(date(2026, 11, 10), CFG) == "extrato"
+    assert tipo_do_dia(date(2026, 11, 15), CFG) == "lembrete"
+    assert tipo_do_dia(date(2026, 11, 20), CFG) == "lembrete"
+    assert tipo_do_dia(date(2026, 11, 12), CFG) is None
+    assert tipo_do_dia(date(2026, 11, 5), CFG) is None
 
 
-def test_atraso_a_cada_intervalo():
-    ana = moradores()["101"]
-    dias_com_aviso = [d for d in range(11, 31)
-                      if decidir_aviso(ana, date(2026, 11, d), CFG)]
-    assert dias_com_aviso == [15, 20, 25, 30]
+def test_extrato_vai_para_todos_com_email():
+    msgs = executar(dados(), date(2026, 11, 10), CFG)
+    assert [m["To"] for m in msgs] == ["ana@x.com", "bruno@x.com, carla@x.com",
+                                       "caio@x.com", "eu@x.com"]
+    ana = msgs[0].get_content()
+    assert "R$ 36,40" in ana and "R$ 9,10" in ana and "R$ 32,00 de crédito" in ana
+    assert "chave@pix" not in ana  # quem tem crédito não recebe PIX
+    caio = msgs[2].get_content()
+    assert "devendo R$ 9,10" in caio and "chave@pix" in caio
+    resumo = msgs[3].get_content()
+    assert "Apto 202" in resumo and "devendo" in resumo and "999" in resumo
+    assert "Apto 101 (Eu (responsável)): não cobrado" in resumo
 
 
-def test_atraso_conta_desde_o_mes_mais_antigo():
-    caio = moradores()["103"]
-    aviso = decidir_aviso(caio, date(2026, 11, 9), CFG)  # 10/10 + 30 dias
-    assert aviso.tipo == "atraso"
-    assert aviso.meses_abertos == [(2026, 10), (2026, 11)]
+def test_lembrete_so_para_quem_deve():
+    msgs = executar(dados(), date(2026, 11, 15), CFG)
+    assert [m["To"] for m in msgs] == ["caio@x.com", "eu@x.com"]
 
 
-def test_mes_atual_sem_coluna_conta_como_aberto():
-    linhas = [["Apto", "Nome", "Email", "2026-11"], ["201", "Duda", "d@x.com", "pago"]]
-    duda = parse_planilha(linhas)[0]
-    assert decidir_aviso(duda, date(2026, 12, 7), CFG).tipo == "lembrete"
-
-
-def test_executar_monta_emails_e_resumo():
-    cfg = Config(**{**CFG.__dict__, "email_sindico": "sindico@x.com", "chave_pix": "12.345.678/0001-90"})
-    msgs = executar(PLANILHA, date(2026, 11, 15), cfg)
-    para = [m["To"] for m in msgs]
-    assert para == ["ana@x.com", "sindico@x.com"]  # Caio: 36 dias, fora do intervalo
-    corpo = msgs[0].get_content()
-    assert "novembro/2026" in corpo and "12.345.678/0001-90" in corpo
-    assert msgs[0]["Reply-To"] == "sindico@x.com"
-    assert "Apto 101" in msgs[1].get_content()
+def test_dia_sem_envio():
+    assert executar(dados(), date(2026, 11, 12), CFG) == []

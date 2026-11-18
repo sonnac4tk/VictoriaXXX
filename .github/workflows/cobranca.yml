@@ -1,4 +1,4 @@
-name: Cobrança do condomínio
+name: Cobrança da luz
 
 on:
   schedule:
@@ -32,16 +32,14 @@ jobs:
           PLANILHA_ID: ${{ secrets.PLANILHA_ID }}
           SMTP_USUARIO: ${{ secrets.SMTP_USUARIO }}
           SMTP_SENHA: ${{ secrets.SMTP_SENHA }}
-          EMAIL_SINDICO: ${{ secrets.EMAIL_SINDICO }}
+          EMAIL_RESPONSAVEL: ${{ secrets.EMAIL_RESPONSAVEL }}
           CHAVE_PIX: ${{ secrets.CHAVE_PIX }}
           # Configurações (Settings > Secrets and variables > Actions > Variables)
-          PLANILHA_ABA: ${{ vars.PLANILHA_ABA }}
           NOME_PREDIO: ${{ vars.NOME_PREDIO }}
           REMETENTE_NOME: ${{ vars.REMETENTE_NOME }}
-          DIA_VENCIMENTO: ${{ vars.DIA_VENCIMENTO }}
-          DIAS_ANTES: ${{ vars.DIAS_ANTES }}
-          INTERVALO_ATRASO: ${{ vars.INTERVALO_ATRASO }}
-          INSTRUCOES_EXTRA: ${{ vars.INSTRUCOES_EXTRA }}
+          DIA_EXTRATO: ${{ vars.DIA_EXTRATO }}
+          INTERVALO_LEMBRETE: ${{ vars.INTERVALO_LEMBRETE }}
+          SUGESTAO_CREDITO: ${{ vars.SUGESTAO_CREDITO }}
           SMTP_HOST: ${{ vars.SMTP_HOST }}
           SMTP_PORT: ${{ vars.SMTP_PORT }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.simulacao || vars.DRY_RUN }}
